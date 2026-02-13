@@ -8,10 +8,16 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send } from "lucide-react";
+import { Send, Loader2 } from "lucide-react"; // Added Loader2 for animation
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -22,15 +28,15 @@ interface TransferFormProps {
 export function TransferForm({ onSuccess }: TransferFormProps) {
   const { connection } = useConnection();
   const { publicKey, sendTransaction, connected } = useWallet();
+  
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-
+  
+  // Validasi address Solana
   const validateAddress = (address: string): boolean => {
     try {
       const pubkey = new PublicKey(address);
-      // Check if it's a valid public key on the ed25519 curve
       return PublicKey.isOnCurve(pubkey.toBytes());
     } catch {
       return false;
@@ -38,32 +44,39 @@ export function TransferForm({ onSuccess }: TransferFormProps) {
   };
 
   const handleTransfer = async () => {
-    setError("");
-
-    if (!publicKey) {
+    // 1. Basic Validation
+    if (!publicKey || !connection) {
       toast.error("Wallet not connected");
       return;
     }
 
-    // Validate recipient address
     if (!validateAddress(recipient)) {
-      setError("Invalid Solana address");
+      toast.error("Invalid recipient address", {
+        description: "Please check the Solana address format.",
+      });
       return;
     }
 
-    // Validate amount
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0) {
-      setError("Invalid amount");
+      toast.error("Invalid amount", {
+        description: "Amount must be greater than 0.",
+      });
       return;
     }
 
+    // 2. Execution
     setIsLoading(true);
+    const toastId = toast.loading("Processing transaction..."); // Simpan ID toast
+
     try {
       const recipientPubkey = new PublicKey(recipient);
+      
+      // Konversi SOL ke Lamports (Satuan terkecil)
+      // Math.round digunakan untuk menghindari floating point error sederhana
       const lamports = Math.round(amountNum * LAMPORTS_PER_SOL);
 
-      // Create transfer instruction
+      // A. Buat Instruksi Transfer
       const transaction = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
@@ -72,47 +85,76 @@ export function TransferForm({ onSuccess }: TransferFormProps) {
         })
       );
 
-      // Get latest blockhash
+      // B. Ambil Blockhash Terbaru (Wajib di Solana modern)
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
 
-      // Send transaction
+      // C. Request User Signature & Kirim ke Jaringan
+      // (Wallet Adapter otomatis handle signing di sini)
       const signature = await sendTransaction(transaction, connection);
 
-      // Wait for confirmation
+      // D. Update Toast: Memberi tahu user kita sedang menunggu konfirmasi blok
+      toast.message("Transaction Sent", {
+        id: toastId, // Update toast yang sama
+        description: "Waiting for confirmation on Solana Devnet...",
+      });
+
+      // E. Tunggu Konfirmasi (Finality)
       await connection.confirmTransaction({
         signature,
         blockhash,
         lastValidBlockHeight,
       });
 
+      // F. Sukses!
       toast.success("Transfer successful!", {
+        id: toastId, // Ganti status toast loading tadi jadi sukses
         description: (
           <a
             href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`}
             target="_blank"
             rel="noopener noreferrer"
-            className="underline"
+            className="underline text-blue-500 hover:text-blue-600"
           >
-            View transaction
+            View on Solana Explorer
           </a>
         ),
+        duration: 5000,
       });
 
-      // Clear form
+      // G. Reset Form
       setRecipient("");
       setAmount("");
+      
+      // Refresh balance di parent component (jika ada)
       onSuccess?.();
-    } catch (error: unknown) {
-      console.error("Transfer failed:", error);
 
-      // Handle user rejection
-      if (error instanceof Error && error.message.includes("User rejected")) {
-        toast.info("Transaction cancelled by user");
+    } catch (error: unknown) { 
+      console.error("Transfer failed:", error);
+      
+      // 2. Siapkan variable pesan default
+      let errorMessage = "An unknown error occurred";
+
+      // 3. Lakukan pengecekan tipe (Type Guard)
+      if (error instanceof Error) {
+        // Jika error adalah instance dari object Error, kita aman ambil .message
+        errorMessage = error.message;
+      } else if (typeof error === "string") {
+        // Jaga-jaga jika error berupa string biasa
+        errorMessage = error;
+      }
+
+      // 4. Logika penanganan error menggunakan variable yang sudah aman
+      if (errorMessage.includes("User rejected")) {
+        toast.info("Transaction cancelled", {
+          id: toastId,
+          description: "You cancelled the signature request.",
+        });
       } else {
         toast.error("Transfer failed", {
-          description: "Please check your balance and try again.",
+          id: toastId,
+          description: errorMessage,
         });
       }
     } finally {
@@ -121,55 +163,60 @@ export function TransferForm({ onSuccess }: TransferFormProps) {
   };
 
   return (
-    <Card>
+    <Card className="w-full">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Send className="h-5 w-5" />
-          Transfer SOL
+          Transfer SOL (Devnet)
         </CardTitle>
         <CardDescription>
-          Send SOL to another wallet address
+          Send fake SOL to another devnet wallet address.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        
+        {/* Input Recipient */}
         <div className="space-y-2">
           <Label htmlFor="recipient">Recipient Address</Label>
           <Input
             id="recipient"
-            placeholder="Enter Solana address"
+            placeholder="Paste Solana address here..."
             value={recipient}
-            onChange={(e) => {
-              setRecipient(e.target.value);
-              setError("");
-            }}
+            onChange={(e) => setRecipient(e.target.value)}
             disabled={!connected || isLoading}
+            className="font-mono text-sm"
           />
         </div>
+
+        {/* Input Amount */}
         <div className="space-y-2">
           <Label htmlFor="amount">Amount (SOL)</Label>
           <Input
             id="amount"
             type="number"
-            step="0.001"
+            step="0.1"
             min="0"
-            placeholder="0.00"
+            placeholder="0.0"
             value={amount}
-            onChange={(e) => {
-              setAmount(e.target.value);
-              setError("");
-            }}
+            onChange={(e) => setAmount(e.target.value)}
             disabled={!connected || isLoading}
           />
         </div>
-        {error && (
-          <p className="text-sm text-red-500">{error}</p>
-        )}
+
+        {/* Action Button */}
         <Button
           onClick={handleTransfer}
           disabled={!connected || isLoading || !recipient || !amount}
           className="w-full"
         >
-          {isLoading ? "Sending..." : "Send SOL"}
+          {isLoading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Processing...
+            </>
+          ) : (
+            "Send SOL"
+          )}
         </Button>
       </CardContent>
     </Card>
