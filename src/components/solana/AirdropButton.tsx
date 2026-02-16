@@ -1,82 +1,60 @@
 "use client";
 
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Droplets } from "lucide-react";
 import { useState } from "react";
+import { useWallets, type ConnectedWallet } from "@privy-io/react-auth";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Droplets, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { address, lamports, type Address, type Rpc, type SolanaRpcApi } from "@solana/kit";
 
-interface AirdropButtonProps {
-  onSuccess?: () => void;
+interface SolanaWallet extends ConnectedWallet {
+  chainType: string;
+  rpc?: Rpc<SolanaRpcApi>;
 }
 
-export function AirdropButton({ onSuccess }: AirdropButtonProps) {
-  const { connection } = useConnection();
-  const { publicKey, connected } = useWallet();
-  const [isLoading, setIsLoading] = useState(false);
+export function AirdropButton({ onSuccess }: { onSuccess?: () => void }) {
+  const { wallets } = useWallets();
+  const [loading, setLoading] = useState(false);
 
   const requestAirdrop = async () => {
-    if (!publicKey) return;
+    const solanaWallet = (wallets as SolanaWallet[]).find((w) => w.chainType === "solana");
+    if (!solanaWallet || !solanaWallet.rpc) {
+      toast.error("Solana wallet not found");
+      return;
+    }
 
-    setIsLoading(true);
+    setLoading(true);
     try {
-      const signature = await connection.requestAirdrop(
-        publicKey,
-        1 * LAMPORTS_PER_SOL
-      );
-
-      // Wait for confirmation
-      const latestBlockhash = await connection.getLatestBlockhash();
-      await connection.confirmTransaction({
-        signature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      });
-
-      toast.success("Airdrop successful!", {
-        description: (
-          <a
-            href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-          >
-            View transaction
-          </a>
-        ),
-      });
-
-      onSuccess?.();
+      await solanaWallet.rpc.requestAirdrop(
+        address(solanaWallet.address as Address),
+        lamports(BigInt(1_000_000_000)) // 1 SOL
+      ).send();
+      
+      toast.success("Airdrop success! 1 SOL added.");
+      if (onSuccess) onSuccess();
     } catch (error) {
-      console.error("Airdrop failed:", error);
-      toast.error("Airdrop failed", {
-        description: "Rate limit reached or faucet busy. Try again later.",
-      });
+      console.error(error);
+      toast.error("Airdrop failed. Try again later.");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Droplets className="h-5 w-5" />
-          Airdrop
-        </CardTitle>
-        <CardDescription>
-          Request free SOL from the Devnet faucet
-        </CardDescription>
+        <CardTitle className="text-sm font-medium">Faucet</CardTitle>
       </CardHeader>
       <CardContent>
-        <Button
-          onClick={requestAirdrop}
-          disabled={!connected || isLoading}
-          className="w-full"
+        <Button 
+          onClick={requestAirdrop} 
+          disabled={loading} 
+          className="w-full gap-2"
+          variant="secondary"
         >
-          {isLoading ? "Requesting..." : "Request 1 SOL"}
+          {loading ? <Loader2 className="animate-spin h-4 w-4" /> : <Droplets className="h-4 w-4" />}
+          Request 1 SOL
         </Button>
       </CardContent>
     </Card>
